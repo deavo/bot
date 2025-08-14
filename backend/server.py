@@ -358,7 +358,7 @@ async def telegram_webhook(secret_token: str, update: TelegramUpdate, background
                     return
                 if text.startswith('/quote'):
                     parts = text.split(maxsplit=1)
-                    cat = parts[1].strip() if len(parts) &gt; 1 else None
+                    cat = parts[1].strip() if len(parts) > 1 else None
                     quote = await get_random_quote_by_category(cat)
                     if not quote:
                         await send_telegram_message(chat_id, "Цитаты не найдены. Пожалуйста, импортируйте их на сервере.")
