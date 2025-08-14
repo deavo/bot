@@ -180,7 +180,7 @@ async def import_quotes(file_path: Optional[str] = None, overwrite: bool = False
             try:
                 data = json.loads(line)
                 # Ensure id
-                if 'id' not in data:
+                if not data.get('id'):
                     data['id'] = str(uuid.uuid4())
                 if 'created_at' not in data:
                     data['created_at'] = datetime.utcnow().isoformat()
