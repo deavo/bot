@@ -347,7 +347,7 @@ async def telegram_webhook(secret_token: str, update: TelegramUpdate, background
                         "Привет! Я бот с цитатами.\n"
                         "Команды:\n"
                         "/categories — список категорий\n"
-                        "/quote <категория&gt; — случайная цитата из категории (напр.: /quote Любовь)\n"
+                        "/quote <категория> — случайная цитата из категории (напр.: /quote Любовь)\n"
                         "/quote — случайная цитата из всех"
                     ))
                     return
