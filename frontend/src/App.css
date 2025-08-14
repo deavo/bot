@@ -1,34 +1,89 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* Global layout */
+.App {
+  min-height: 100vh;
+  background: radial-gradient(1200px 800px at 20% -10%, rgba(99,102,241,0.15), transparent),
+              radial-gradient(800px 600px at 120% 10%, rgba(34,197,94,0.12), transparent),
+              #0b0c10;
+  color: white;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+.header {
+  padding: 32px 16px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
 }
+.brand img { width: 40px; height: 40px; border-radius: 8px; }
+.brand h1 { font-size: 18px; margin: 0; color: #e5e7eb; }
 
-.App-link {
-    color: #61dafb;
-}
+.container { max-width: 980px; margin: 0 auto; padding: 0 16px 48px; }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+/* Tabs */
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 20px; }
+.tab {
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #e5e7eb;
+  transition: all .2s ease;
 }
+.tab:hover { background: rgba(255,255,255,0.1); }
+.tab.active { background: #6366f1; color: white; border-color: transparent; }
+
+/* Quote card */
+.quoteCard {
+  position: relative;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  padding: 24px 52px;
+  min-height: 170px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+}
+.quoteText { font-size: 20px; line-height: 1.5; color: #fafafa; }
+.quoteMeta { margin-top: 12px; color: #cbd5e1; font-size: 14px; }
+
+/* Arrows */
+.arrowBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px; height: 40px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #e5e7eb; cursor: pointer;
+  transition: all .2s ease;
+}
+.arrowBtn:hover { background: rgba(255,255,255,0.16); }
+.arrowLeft { left: 8px; }
+.arrowRight { right: 8px; }
+.arrowBtn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Actions */
+.actions { display: flex; gap: 10px; margin-top: 18px; }
+.button {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #16a34a;
+  color: white;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+.button.secondary { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #e5e7eb; }
+.button:disabled { opacity: .5; cursor: not-allowed; }
+
+.footer { margin-top: 28px; color: #9ca3af; font-size: 12px; text-align: center; }
