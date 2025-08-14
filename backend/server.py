@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,7 +10,6 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime
 import httpx
-import asyncio
 import json
 import re
 
@@ -36,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# --------------- Models ---------------
+# -------------------- Models --------------------
 class StatusCheck(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     client_name: str
@@ -79,9 +78,16 @@ class WebhookStatusResponse(BaseModel):
     message: str
 
 
-# --------------- Utilities ---------------
+# -------------------- Config & Utils --------------------
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" if TELEGRAM_BOT_TOKEN else None
+START_PHOTO_URL = os.environ.get('START_PHOTO_URL')
+# ADMIN_IDS: comma or space separated list (e.g., "5193519878,123456")
+_admin_env = os.environ.get('ADMIN_IDS', '')
+ADMIN_IDS = set()
+for part in re.split(r'[\s,]+', _admin_env.strip()) if _admin_env else []:
+    if part.isdigit():
+        ADMIN_IDS.add(int(part))
 
 # In-memory webhook config (persist later if needed)
 webhook_config: Dict[str, Any] = {
@@ -91,15 +97,124 @@ webhook_config: Dict[str, Any] = {
     "last_update": None,
 }
 
+# i18n messages
+MESSAGES = {
+    'ru': {
+        'welcome': "Привет! Я бот с цитатами.",
+        'usage': "Команды:\n/categories — список категорий\n/quote <категория> — случайная цитата из категории (например: /quote Любовь)\n/quote — случайная цитата из всех",
+        'choose_language': "Выберите язык интерфейса:",
+        'categories_title': "Категории:",
+        'no_categories': "Категории не найдены. Импортируйте цитаты.",
+        'no_quotes': "Цитаты не найдены. Пожалуйста, импортируйте их на сервере.",
+        'category_label': "Категория",
+        'help_hint': "Напишите /quote или /categories",
+        'lang_set': "Язык установлен: Русский.",
+        'button_ru': "Русский",
+        'button_uk': "Українська",
+        'button_en': "English",
+    },
+    'uk': {
+        'welcome': "Вітаю! Я бот з цитатами.",
+        'usage': "Команди:\n/categories — список категорій\n/quote <категорія> — випадкова цитата з категорії (наприклад: /quote Любов)\n/quote — випадкова цитата з усіх",
+        'choose_language': "Оберіть мову інтерфейсу:",
+        'categories_title': "Категорії:",
+        'no_categories': "Категорії не знайдені. Імпортуйте цитати.",
+        'no_quotes': "Цитат не знайдено. Будь ласка, імпортуйте їх на сервері.",
+        'category_label': "Категорія",
+        'help_hint': "Напишіть /quote або /categories",
+        'lang_set': "Мову встановлено: Українська.",
+        'button_ru': "Русский",
+        'button_uk': "Українська",
+        'button_en': "English",
+    },
+    'en': {
+        'welcome': "Hello! I'm a quotes bot.",
+        'usage': "Commands:\n/categories — list categories\n/quote <category> — random quote from category (e.g.: /quote Love)\n/quote — random quote from all",
+        'choose_language': "Choose your language:",
+        'categories_title': "Categories:",
+        'no_categories': "No categories found. Please import quotes.",
+        'no_quotes': "No quotes found. Please import them on the server.",
+        'category_label': "Category",
+        'help_hint': "Send /quote or /categories",
+        'lang_set': "Language set: English.",
+        'button_ru': "Русский",
+        'button_uk': "Українська",
+        'button_en': "English",
+    },
+}
+
+LANG_NAMES = {'ru': 'Русский', 'uk': 'Українська', 'en': 'English'}
+
+
+def t(lang: str, key: str) -> str:
+    return MESSAGES.get(lang, MESSAGES['ru']).get(key, '')
+
+
+async def get_chat_lang(chat_id: int) -> str:
+    doc = await db.chat_prefs.find_one({"chat_id": chat_id})
+    return doc.get('lang', 'ru') if doc else 'ru'
+
+
+async def set_chat_lang(chat_id: int, lang: str):
+    if lang not in ('ru', 'uk', 'en'):
+        lang = 'ru'
+    await db.chat_prefs.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"chat_id": chat_id, "lang": lang, "updated_at": datetime.utcnow()}},
+        upsert=True,
+    )
+
+
+async def send_telegram(method: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_API_URL:
+        logger.error("TELEGRAM_BOT_TOKEN not configured")
+        return None
+    async with httpx.AsyncClient(timeout=20.0) as http:
+        resp = await http.post(f"{TELEGRAM_API_URL}/{method}", json=payload)
+        if resp.status_code != 200:
+            logger.error(f"Telegram API error {method}: {resp.text}")
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            return None
+
+
+async def send_message(chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None):
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        data["reply_markup"] = reply_markup
+    await send_telegram("sendMessage", data)
+
+
+async def send_photo(chat_id: int, photo_url: str, caption: str, reply_markup: Optional[Dict[str, Any]] = None):
+    data = {"chat_id": chat_id, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
+    if reply_markup:
+        data["reply_markup"] = reply_markup
+    await send_telegram("sendPhoto", data)
+
+
+async def answer_callback(callback_query_id: str, text: str = ""):
+    await send_telegram("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
+
+
+def language_keyboard(lang: str) -> Dict[str, Any]:
+    return {
+        "inline_keyboard": [[
+            {"text": t(lang, 'button_ru'), "callback_data": "setlang:ru"},
+            {"text": t(lang, 'button_uk'), "callback_data": "setlang:uk"},
+            {"text": t(lang, 'button_en'), "callback_data": "setlang:en"},
+        ]]
+    }
+
 
 def sanitize_mongo_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
-    # Remove MongoDB internal keys
     d = dict(doc)
     d.pop('_id', None)
     return d
 
 
-# --------------- Routes ---------------
+# -------------------- Routes --------------------
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -169,7 +284,6 @@ async def import_quotes(file_path: Optional[str] = None, overwrite: bool = False
     batch: List[Dict[str, Any]] = []
     batch_size = 5000
 
-    # Stream-read JSON Lines to support huge datasets
     with path.open('r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
@@ -177,12 +291,10 @@ async def import_quotes(file_path: Optional[str] = None, overwrite: bool = False
                 continue
             try:
                 data = json.loads(line)
-                # Ensure id & created_at
                 if not data.get('id'):
                     data['id'] = str(uuid.uuid4())
                 if not data.get('created_at'):
                     data['created_at'] = datetime.utcnow()
-                # Validate minimal fields
                 if not data.get('text') or not data.get('category'):
                     continue
                 batch.append(data)
@@ -211,7 +323,6 @@ class GenerateRequest(BaseModel):
 async def generate_quotes(req: GenerateRequest):
     cats = req.categories
     if not cats:
-        # default set
         cats = ["Любовь", "Жизнь", "Мотивация", "Дружба", "Юмор"]
 
     if req.per_category < 1:
@@ -268,8 +379,7 @@ async def health():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 
-# -------- Telegram Bot Webhook (optional if token provided) --------
-
+# -------------------- Telegram Bot Webhook --------------------
 @api_router.post("/telegram/webhook/set", response_model=WebhookStatusResponse)
 async def set_webhook(req: WebhookSetRequest):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_API_URL:
@@ -357,24 +467,9 @@ class TelegramUpdate(BaseModel):
     callback_query: Optional[Dict[str, Any]] = None
 
 
-async def send_telegram_message(chat_id: int, text: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_API_URL:
-        logger.error("TELEGRAM_BOT_TOKEN missing. Cannot send messages.")
-        return
-    async with httpx.AsyncClient(timeout=20.0) as http:
-        resp = await http.post(f"{TELEGRAM_API_URL}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-        })
-        if resp.status_code != 200:
-            logger.error(f"Failed to send message: {resp.text}")
-
-
 async def get_random_quote_by_category(category: Optional[str] = None) -> Optional[Quote]:
-    query = {}
+    query: Dict[str, Any] = {}
     if category:
-        # case-insensitive exact match
         query["category"] = {"$regex": f"^{re.escape(category)}$", "$options": "i"}
     pipeline = []
     if query:
@@ -395,40 +490,63 @@ async def telegram_webhook(secret_token: str, update: TelegramUpdate, background
 
     async def process_update():
         try:
+            # Handle callback button: set language
+            if update.callback_query:
+                cq = update.callback_query
+                data = cq.get('data') if isinstance(cq, dict) else None
+                msg = (cq.get('message') or {}) if isinstance(cq, dict) else {}
+                chat = (msg.get('chat') or {})
+                chat_id = chat.get('id')
+                if chat_id and data and data.startswith('setlang:'):
+                    lang = data.split(':', 1)[1]
+                    await set_chat_lang(chat_id, lang)
+                    await answer_callback(cq.get('id'), text=LANG_NAMES.get(lang, ''))
+                    await send_message(chat_id, t(lang, 'lang_set'))
+                return
+
             if update.message:
                 chat_id = update.message.get('chat', {}).get('id')
                 text = update.message.get('text', '') or ''
                 if not chat_id:
                     return
 
+                lang = await get_chat_lang(chat_id)
+
                 # Commands
                 if text.startswith('/start'):
-                    await send_telegram_message(chat_id, (
-                        "Привет! Я бот с цитатами.\n"
-                        "Команды:\n"
-                        "/categories — список категорий\n"
-                        "/quote <категория> — случайная цитата из категории (напр.: /quote Любовь)\n"
-                        "/quote — случайная цитата из всех"
-                    ))
+                    caption = f"{t(lang, 'welcome')}\n\n{t(lang, 'usage')}\n\n{t(lang, 'choose_language')}"
+                    kb = language_keyboard(lang)
+                    if START_PHOTO_URL:
+                        await send_photo(chat_id, START_PHOTO_URL, caption, reply_markup=kb)
+                    else:
+                        await send_message(chat_id, caption, reply_markup=kb)
+                    return
+                if text.startswith('/lang'):
+                    kb = language_keyboard(lang)
+                    await send_message(chat_id, t(lang, 'choose_language'), reply_markup=kb)
                     return
                 if text.startswith('/categories'):
                     cats = await db.quotes.distinct('category')
-                    cats_text = "\n".join(f"• {c}" for c in sorted(cats)) if cats else "Категории не найдены. Импортируйте цитаты."
-                    await send_telegram_message(chat_id, f"Категории:\n{cats_text}")
+                    if cats:
+                        cats_text = "\n".join(f"• {c}" for c in sorted(cats))
+                        await send_message(chat_id, f"{t(lang, 'categories_title')}\n{cats_text}")
+                    else:
+                        await send_message(chat_id, t(lang, 'no_categories'))
                     return
                 if text.startswith('/quote'):
                     parts = text.split(maxsplit=1)
                     cat = parts[1].strip() if len(parts) > 1 else None
                     quote = await get_random_quote_by_category(cat)
                     if not quote:
-                        await send_telegram_message(chat_id, "Цитаты не найдены. Пожалуйста, импортируйте их на сервере.")
+                        await send_message(chat_id, t(lang, 'no_quotes'))
                         return
-                    msg = f"\u275D {quote.text}\n— {quote.author or 'Неизвестный'}\nКатегория: {quote.category}"
-                    await send_telegram_message(chat_id, msg)
+                    cat_label = t(lang, 'category_label')
+                    msg = f"\u275D {quote.text}\n— {quote.author or '—'}\n{cat_label}: {quote.category}"
+                    await send_message(chat_id, msg)
                     return
 
                 # Default: help hint
-                await send_telegram_message(chat_id, "Напишите /quote или /categories")
+                await send_message(chat_id, t(lang, 'help_hint'))
         except Exception as e:
             logger.exception(f"Error processing telegram update: {e}")
 
@@ -450,9 +568,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def on_startup():
-    # Useful indexes
     await db.quotes.create_index("category")
     await db.quotes.create_index("created_at")
+    await db.chat_prefs.create_index("chat_id", unique=True)
 
 
 @app.on_event("shutdown")
