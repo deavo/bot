@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import axios from "axios";
 import "./App.css";
 import { ChevronLeft, ChevronRight, RefreshCcw } from "lucide-react";
@@ -7,25 +7,6 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const DEFAULT_CATEGORIES = ["Любовь", "Жизнь", "Мотивация", "Дружба", "Юмор"];
-
-function useApi() {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const call = async (method, url, data) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await axios({ method, url, data });
-      return res.data;
-    } catch (e) {
-      setError(e?.response?.data?.detail || e.message);
-      throw e;
-    } finally {
-      setLoading(false);
-    }
-  };
-  return { loading, error, call };
-}
 
 function Header({ onImport, importing }) {
   return (
@@ -75,15 +56,16 @@ function QuoteCard({ quote, onPrev, onNext, disablePrev, disableNext }) {
 }
 
 export default function App() {
-  const { loading, error, call } = useApi();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [active, setActive] = useState(DEFAULT_CATEGORIES[0]);
   const [pageByCategory, setPageByCategory] = useState({});
   const [quotesByCategory, setQuotesByCategory] = useState({});
+  const [indexByCategory, setIndexByCategory] = useState({});
 
   const activeQuotes = quotesByCategory[active] || [];
   const activePage = pageByCategory[active] || 1;
-  const [indexByCategory, setIndexByCategory] = useState({});
   const activeIndex = indexByCategory[active] || 0;
 
   const disablePrev = activeIndex <= 0 && activePage <= 1;
@@ -91,29 +73,42 @@ export default function App() {
 
   const fetchCategories = async () => {
     try {
-      const data = await call("GET", `${API}/quotes/categories`);
-      const serverCats = (data.categories || []).map((c) => c.name);
+      const res = await axios.get(`${API}/quotes/categories`);
+      const serverCats = (res.data.categories || []).map((c) => c.name);
       if (serverCats.length > 0) setCategories(serverCats);
-    } catch (_) {}
+    } catch (e) {
+      // ignore
+    }
   };
 
   const fetchQuotes = async (category, page = 1) => {
-    const data = await call("GET", `${API}/quotes`, { params: { category, page, limit: 20 } });
-    // axios config above doesn't pass params when using data with GET, so adjust:
-    // Re-call correctly
-    const res = await axios.get(`${API}/quotes`, { params: { category, page, limit: 20 } });
-    const payload = res.data;
-    setQuotesByCategory((prev) => ({ ...prev, [category]: payload.items }));
-    setPageByCategory((prev) => ({ ...prev, [category]: payload.page }));
-    setIndexByCategory((prev) => ({ ...prev, [category]: 0 }));
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await axios.get(`${API}/quotes`, { params: { category, page, limit: 20 } });
+      const payload = res.data;
+      setQuotesByCategory((prev) => ({ ...prev, [category]: payload.items }));
+      setPageByCategory((prev) => ({ ...prev, [category]: payload.page }));
+      setIndexByCategory((prev) => ({ ...prev, [category]: 0 }));
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const importDemo = async () => {
     try {
-      await call("POST", `${API}/quotes/import`);
+      setLoading(true);
+      setError(null);
+      await axios.post(`${API}/quotes/import`);
       await fetchCategories();
       await fetchQuotes(active, 1);
-    } catch (_) {}
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const next = async () => {
@@ -122,7 +117,6 @@ export default function App() {
     if (idx < list.length) {
       setIndexByCategory((p) => ({ ...p, [active]: idx }));
     } else {
-      // try next page
       const nextPage = (pageByCategory[active] || 1) + 1;
       await fetchQuotes(active, nextPage);
     }
@@ -136,7 +130,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    // initial load
     (async () => {
       await fetchCategories();
       await fetchQuotes(active, 1);
@@ -145,7 +138,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // whenever active category changes, load page 1
     (async () => {
       await fetchQuotes(active, 1);
     })();

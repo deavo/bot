@@ -12,8 +12,7 @@ from datetime import datetime
 import httpx
 import asyncio
 import json
-from bson import ObjectId
-
+import re
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -94,11 +93,10 @@ webhook_config: Dict[str, Any] = {
 
 
 def sanitize_mongo_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
-    # Remove ObjectId and map to our Quote model
-    doc = dict(doc)
-    if '_id' in doc:
-        doc.pop('_id', None)
-    return doc
+    # Remove MongoDB internal keys
+    d = dict(doc)
+    d.pop('_id', None)
+    return d
 
 
 # --------------- Routes ---------------
@@ -128,7 +126,7 @@ async def get_categories():
         {"$group": {"_id": "$category", "count": {"$sum": 1}}},
         {"$sort": {"_id": 1}}
     ]
-    groups = await db.quotes.aggregate(pipeline).to_list(length=1000)
+    groups = await db.quotes.aggregate(pipeline).to_list(length=100000)
     categories = [{"name": g.get("_id"), "count": g.get("count", 0)} for g in groups]
     return {"categories": categories}
 
@@ -168,8 +166,8 @@ async def import_quotes(file_path: Optional[str] = None, overwrite: bool = False
         await db.quotes.delete_many({})
 
     inserted = 0
-    batch = []
-    batch_size = 1000
+    batch: List[Dict[str, Any]] = []
+    batch_size = 5000
 
     # Stream-read JSON Lines to support huge datasets
     with path.open('r', encoding='utf-8') as f:
@@ -179,11 +177,11 @@ async def import_quotes(file_path: Optional[str] = None, overwrite: bool = False
                 continue
             try:
                 data = json.loads(line)
-                # Ensure id
+                # Ensure id & created_at
                 if not data.get('id'):
                     data['id'] = str(uuid.uuid4())
-                if 'created_at' not in data:
-                    data['created_at'] = datetime.utcnow().isoformat()
+                if not data.get('created_at'):
+                    data['created_at'] = datetime.utcnow()
                 # Validate minimal fields
                 if not data.get('text') or not data.get('category'):
                     continue
@@ -199,6 +197,69 @@ async def import_quotes(file_path: Optional[str] = None, overwrite: bool = False
         inserted += len(batch)
 
     return {"inserted": inserted, "file": str(path)}
+
+
+# Quotes: generate synthetic large dataset (optional)
+class GenerateRequest(BaseModel):
+    categories: Optional[List[str]] = None
+    per_category: int = 1000
+    to_file: bool = False
+    file_path: Optional[str] = None
+    overwrite: bool = False
+
+@api_router.post("/quotes/generate")
+async def generate_quotes(req: GenerateRequest):
+    cats = req.categories
+    if not cats:
+        # default set
+        cats = ["Любовь", "Жизнь", "Мотивация", "Дружба", "Юмор"]
+
+    if req.per_category < 1:
+        raise HTTPException(status_code=400, detail="per_category must be >= 1")
+
+    if req.overwrite:
+        await db.quotes.delete_many({})
+
+    total_target = len(cats) * req.per_category
+    inserted = 0
+    batch: List[Dict[str, Any]] = []
+    batch_size = 10000
+
+    out_path = None
+    writer = None
+    if req.to_file:
+        out_path = Path(req.file_path) if req.file_path else ROOT_DIR / 'data' / f'quotes_generated_{int(datetime.utcnow().timestamp())}.jsonl'
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        writer = out_path.open('w', encoding='utf-8')
+
+    for cat in cats:
+        for i in range(req.per_category):
+            q = {
+                "id": str(uuid.uuid4()),
+                "category": cat,
+                "text": f"Цитата №{i+1} о {cat}",
+                "author": "Генератор",
+                "source": "synthetic",
+                "created_at": datetime.utcnow(),
+            }
+            if writer:
+                writer.write(json.dumps(q, ensure_ascii=False) + "\n")
+            else:
+                batch.append(q)
+                if len(batch) >= batch_size:
+                    await db.quotes.insert_many(batch)
+                    inserted += len(batch)
+                    batch = []
+
+    if writer:
+        writer.close()
+        return {"generated": total_target, "file": str(out_path)}
+
+    if batch:
+        await db.quotes.insert_many(batch)
+        inserted += len(batch)
+
+    return {"inserted": inserted, "target": total_target}
 
 
 # Health endpoint
@@ -311,14 +372,13 @@ async def send_telegram_message(chat_id: int, text: str):
 
 
 async def get_random_quote_by_category(category: Optional[str] = None) -> Optional[Quote]:
-    query = {"category": category} if category else {}
-    count = await db.quotes.count_documents(query)
-    if count == 0:
-        return None
-    # Random skip (not perfect for huge collections, but ok for demo; could use $sample)
-    pipeline = []
+    query = {}
     if category:
-        pipeline.append({"$match": {"category": category}})
+        # case-insensitive exact match
+        query["category"] = {"$regex": f"^{re.escape(category)}$", "$options": "i"}
+    pipeline = []
+    if query:
+        pipeline.append({"$match": query})
     pipeline.append({"$sample": {"size": 1}})
     docs = await db.quotes.aggregate(pipeline).to_list(length=1)
     if not docs:
